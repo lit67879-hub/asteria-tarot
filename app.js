@@ -601,7 +601,7 @@ function renderPolicy() {
     </div>
     <div class="policy-sections">
       <section class="policy-section"><h3>隐私政策</h3><p>占卜记录、身份档案、昼夜偏好和每日次数保存在当前浏览器；生成解读时，本次问题、牌面和你主动选择的补充信息会发送到这台电脑上的本地服务。记录最多保留两年；清除浏览器数据或更换设备后无法恢复。请不要输入姓名、联系方式、地址、证件号码、账号或其他可识别个人的信息。</p></section>
-      <section class="policy-section"><h3>AI 服务说明</h3><p>当前版本使用本机 Ollama 与 Qwen 生成解读，不调用第三方云端模型，也不需要 API 密钥。若本地 AI 没有启动、繁忙或生成超时，页面会自动保留基础牌义解读。未来部署到公网时需要改用服务器上的模型或云端模型，访客不会使用你个人电脑的内存。</p></section>
+      <section class="policy-section"><h3>AI 服务说明</h3><p>正式发布版本使用 Cloudflare Workers AI 托管的 Qwen 生成解读；本地预览则使用本机 Ollama 与 Qwen。若 AI 服务暂时不可用，页面会保留基础牌义解读。问题、牌面和主动填写的补充信息会发送到对应的 AI 服务，请不要输入可识别个人的信息。</p></section>
       <section class="policy-section"><h3>内容免责声明</h3><p>ASTERIA 用于自我反思和梳理当下，不预知未来，不替代医疗、法律、心理、财务或其他专业意见。医疗、年龄、博彩、考试结果、抽奖、法律、投资、自伤和他人安全类问题不会进入常规解读。</p></section>
     </div>
   `);
