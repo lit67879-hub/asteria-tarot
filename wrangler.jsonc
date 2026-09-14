@@ -6,6 +6,13 @@
   "ai": {
     "binding": "AI"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "asteria-feedback",
+      "database_id": "f2031884-961c-43bc-91af-e21007f107a9"
+    }
+  ],
   "vars": {
     "ALLOWED_ORIGIN": "https://lit67879-hub.github.io",
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"

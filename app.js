@@ -2369,7 +2369,7 @@ async function submitFeedback() {
     document.querySelector("#feedback-count").textContent = "0";
   } catch {
     status.className = "notice warning";
-    status.textContent = "本地预览未配置反馈后台，内容尚未发送。正式上线接入服务端后才能完成提交。";
+    status.textContent = "反馈服务暂时不可用，内容尚未发送。请稍后再试。";
   } finally {
     button.disabled = false;
     button.textContent = "提交反馈";

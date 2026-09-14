@@ -3,6 +3,7 @@ const GENERATION_TIMEOUT_MS = 120_000;
 const RATE_WINDOW_MS = 10 * 60_000;
 const RATE_LIMIT = 8;
 const recentRequests = new Map();
+const recentFeedbackRequests = new Map();
 
 const spreads = {
   yesno: ["共同判断", "共同判断", "共同判断"],
@@ -174,6 +175,19 @@ function rateLimited(request) {
   return false;
 }
 
+function feedbackRateLimited(request) {
+  const ip = request.headers.get("CF-Connecting-IP") || "anonymous";
+  const now = Date.now();
+  const timestamps = (recentFeedbackRequests.get(ip) || []).filter((timestamp) => now - timestamp < RATE_WINDOW_MS);
+  if (timestamps.length >= RATE_LIMIT) {
+    recentFeedbackRequests.set(ip, timestamps);
+    return true;
+  }
+  timestamps.push(now);
+  recentFeedbackRequests.set(ip, timestamps);
+  return false;
+}
+
 async function parseJson(request) {
   const declaredLength = Number(request.headers.get("Content-Length") || 0);
   if (declaredLength > MAX_BODY_BYTES) throw Object.assign(new Error("请求内容过大"), { status: 413, code: "BODY_TOO_LARGE" });
@@ -235,6 +249,34 @@ async function handleReading(request, env) {
   }
 }
 
+async function handleFeedback(request, env) {
+  if (!env.DB) return json(request, env, { ok: false, error: { code: "MISSING_DB_BINDING", message: "反馈存储服务尚未配置。" } }, 503);
+  if (feedbackRateLimited(request)) return json(request, env, { ok: false, error: { code: "RATE_LIMITED", message: "提交过于频繁，请稍后再试。" } }, 429);
+
+  let input;
+  try {
+    input = await parseJson(request);
+  } catch (error) {
+    return json(request, env, { ok: false, error: { code: error.code || "INVALID_REQUEST", message: error.message || "请求无效。" } }, error.status || 400);
+  }
+
+  const content = cleanText(input?.content, 1001);
+  if (!content || content.length > 1000) {
+    return json(request, env, { ok: false, error: { code: "INVALID_FEEDBACK", message: "反馈内容应为 1 到 1000 个字符。" } }, 400);
+  }
+
+  const userAgent = cleanText(request.headers.get("User-Agent"), 300);
+  try {
+    const result = await env.DB.prepare(
+      "INSERT INTO feedback (content, user_agent) VALUES (?, ?)"
+    ).bind(content, userAgent).run();
+    return json(request, env, { ok: true, id: result.meta?.last_row_id || null });
+  } catch (error) {
+    console.error("Feedback persistence exception", error?.message || error);
+    return json(request, env, { ok: false, error: { code: "FEEDBACK_STORAGE_UNAVAILABLE", message: "反馈暂时无法保存，请稍后再试。" } }, 503);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: responseHeaders(request, env) });
@@ -244,9 +286,7 @@ export default {
       return json(request, env, { ok: Boolean(env.AI), service: "asteria-workers-ai", model: String(env.AI_MODEL || "@cf/qwen/qwen3-30b-a3b-fp8") }, env.AI ? 200 : 503);
     }
     if (request.method === "POST" && url.pathname === "/api/reading") return handleReading(request, env);
-    if (request.method === "POST" && url.pathname === "/api/feedback") {
-      return json(request, env, { ok: false, error: { code: "FEEDBACK_NOT_CONFIGURED", message: "反馈服务尚未配置。" } }, 501);
-    }
+    if (request.method === "POST" && url.pathname === "/api/feedback") return handleFeedback(request, env);
     return json(request, env, { ok: false, error: { code: "NOT_FOUND", message: "接口不存在。" } }, 404);
   }
 };

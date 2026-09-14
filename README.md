@@ -16,3 +16,4 @@ Set these Pages variables/bindings in Cloudflare:
 - AI binding `AI`: Cloudflare Workers AI.
 - Variable `AI_MODEL`: optional; defaults to `@cf/qwen/qwen3-30b-a3b-fp8`.
 - Variable `ALLOWED_ORIGIN`: the GitHub Pages origin only, for example `https://your-name.github.io` (do not include `/asteria-tarot`).
+- D1 binding `DB`: the `asteria-feedback` database. Apply `migrations/0001_feedback.sql` before accepting feedback.
