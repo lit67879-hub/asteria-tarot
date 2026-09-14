@@ -19,7 +19,23 @@ const sensitiveCategories = [
   ["自伤或他人安全", /自杀|自伤|伤害自己|伤害他人|他人安全|想死|不想活/]
 ];
 
-const systemPrompt = "你是 ASTERIA 的塔罗解读者。你的任务是帮助提问者反思当下，不宣称预知未来。请使用自然、克制、具体的简体中文，把问题、牌阵位置、牌义及正逆位连成一条有逻辑的解读。正位不等于绝对好，逆位不等于绝对坏。不要作医疗、法律、投资、博彩或人身安全建议，不制造恐惧或依赖，不给确定性承诺。结构必须是：第一段概括整组牌的主线；接下来每张牌各写一段，并在段内明确说出牌阵位置和牌名；最后一到两段给出近期可执行、可验证的行动。只输出 5 到 8 个正文段落，段落间空一行；不要使用标题、项目符号、编号、Markdown、开场寒暄或免责声明。";
+const systemPrompt = `你是 ASTERIA 的塔罗解读者。
+
+你的任务不是预测命运，而是根据提问者的问题、牌阵位置、牌面象征、正逆位和补充背景，帮助对方理解当前处境。
+
+请遵守：
+1. 优先回应提问者真正关心的问题，不要逐条机械翻译牌义。
+2. 每张牌都必须结合它所在的牌阵位置解释。
+3. 至少指出一处牌与牌之间的呼应、冲突或张力。
+4. 注意正逆位带来的变化，但不要把逆位简单解释成坏事。
+5. 使用具体、自然、有分寸的中文，避免“你要相信自己”“一切都会变好”等空泛套话。
+6. 如果信息不足，要明确表达不确定性，不要强行下结论。
+7. 结尾给出一到两个可以在现实中验证的小行动。
+8. 不要使用标题、编号、项目符号或固定套话。
+9. 不要声称能预知未来，也不要制造恐惧或依赖。
+
+覆盖所有牌，但段落组织可以根据问题自由变化；输出 4 到 7 个自然段，段落间空一行。`;
+const retryPrompt = "上一版解读没有完整覆盖所有牌面或结构不合格。请重新生成，只输出自然段正文；完整回应原问题，结合每张牌所在位置，并明确写出牌与牌之间的一处呼应、冲突或张力。不要解释你在重写。";
 
 function cleanText(value, maxLength) {
   if (typeof value !== "string") return "";
@@ -130,6 +146,28 @@ function finalContent(message) {
   return paragraphs.join("\n\n");
 }
 
+function readingQualityIssues(reading, content) {
+  const paragraphs = content.split(/\n\s*\n/).filter(Boolean);
+  const missingCards = reading.cards
+    .filter((card) => !content.includes(card.name))
+    .map((card) => card.name);
+  const issues = [];
+  if (paragraphs.length < 4) issues.push("正文段落过少");
+  if (missingCards.length) issues.push(`未覆盖牌面：${missingCards.join("、")}`);
+  return issues;
+}
+
+async function runAi(ai, model, payload) {
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("AI_TIMEOUT")), GENERATION_TIMEOUT_MS);
+  });
+  const result = await Promise.race([ai.run(model, payload), timeout]);
+  return result?.response
+    || result?.choices?.[0]?.message?.content
+    || result?.choices?.[0]?.text
+    || "";
+}
+
 function allowedOrigin(request, env) {
   const origin = request.headers.get("Origin") || "";
   const configured = String(env.ALLOWED_ORIGIN || "").split(",").map((item) => item.trim()).filter(Boolean);
@@ -225,16 +263,32 @@ async function handleReading(request, env) {
   };
 
   try {
-    const timeout = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("AI_TIMEOUT")), GENERATION_TIMEOUT_MS);
-    });
-    const result = await Promise.race([env.AI.run(model, payload), timeout]);
-    const content = result?.response
-      || result?.choices?.[0]?.message?.content
-      || result?.choices?.[0]?.text
-      || "";
-    const reading = finalContent(content);
-    if (reading.length < 80) return json(request, env, { ok: false, error: { code: "AI_INCOMPLETE", message: "AI 返回内容不完整，已保留基础牌义解读。" } }, 503);
+    const normalized = normalizeReading(input);
+    const firstPayload = {
+      ...payload,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: buildPrompt(normalized) }
+      ]
+    };
+    const firstContent = finalContent(await runAi(env.AI, model, firstPayload));
+    if (firstContent.length < 80) return json(request, env, { ok: false, error: { code: "AI_INCOMPLETE", message: "AI 返回内容不完整，已保留基础牌义解读。" } }, 503);
+
+    const firstIssues = readingQualityIssues(normalized, firstContent);
+    let reading = firstContent;
+    if (firstIssues.length) {
+      console.warn(`Workers AI quality check failed: ${firstIssues.join("；")}；retrying once`);
+      const retryPayload = {
+        ...firstPayload,
+        messages: [...firstPayload.messages, { role: "user", content: retryPrompt }]
+      };
+      try {
+        const retryContent = finalContent(await runAi(env.AI, model, retryPayload));
+        if (retryContent.length >= 80) reading = retryContent;
+      } catch (retryError) {
+        console.warn(`Workers AI retry failed: ${retryError?.message || retryError}`);
+      }
+    }
     return json(request, env, { ok: true, reading: reading.slice(0, 12_000), model, displayModel: "Cloudflare Workers AI" });
   } catch (error) {
     console.error("Workers AI request exception", error?.message || error);

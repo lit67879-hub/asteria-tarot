@@ -512,15 +512,18 @@ function readingCopyMarkup(reading) {
   const paragraphs = String(reading.aiReading || "").split(/\n\s*\n/).filter(Boolean);
   const loading = reading.aiStatus === "loading";
   const success = reading.aiStatus === "success";
-  const status = loading ? "LOCAL AI · 正在生成解读" : success ? `LOCAL AI · ${reading.aiModelDisplay || "QWEN2.5 3B"}` : "LOCAL FALLBACK · AI 暂不可用";
+  const modelDisplay = reading.aiModelDisplay || "AI";
+  const status = loading ? "AI · 正在生成解读" : success ? `AI · ${modelDisplay}` : "基础牌义兜底 · AI 暂不可用";
   const body = loading
-    ? '<div class="reading-loading" role="status"><p>牌已翻开，本机 Qwen 正在结合问题、牌位与正逆位生成解读…</p><span></span><span></span><span></span></div>'
+    ? '<div class="reading-loading" role="status"><p>AI 正在结合问题、牌位与正逆位生成解读…</p><span></span><span></span><span></span></div>'
     : `<div class="reading-paragraphs">${paragraphs.map((paragraph) => `<p>${escapeHTML(paragraph)}</p>`).join("")}</div>`;
   const disclaimer = loading
-    ? "生成只在这台电脑上进行，通常需要几十秒；你的问题不会上传到第三方 AI 服务。"
+    ? ""
     : success
-      ? "以上内容由运行在本机的 Qwen 生成，只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。"
-      : "本地 AI 本次未能完成生成，以上内容由基础牌义在浏览器内组合生成。它只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。";
+      ? modelDisplay.includes("Cloudflare")
+        ? "以上内容由 Cloudflare Workers AI 托管的 Qwen 生成，只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。"
+        : "以上内容由本机 Ollama / Qwen 生成，只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。"
+      : "本次 AI 未能完成生成，以上内容由浏览器内的基础牌义组合生成。它只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。";
 
   return `
     <div class="reading-status${loading ? " is-loading" : ""}" aria-live="polite"><span class="status-dot"></span>${escapeHTML(status)}</div>
