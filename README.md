@@ -14,6 +14,6 @@ Set these Worker variables/secrets in Cloudflare:
 
 - Secret `GEMINI_API_KEY`: the key from Google AI Studio.
 - Variable `GEMINI_MODEL`: optional; defaults to `gemini-2.5-flash`.
-- Variable `ALLOWED_ORIGIN`: the exact GitHub Pages URL, for example `https://your-name.github.io/asteria-tarot`.
+- Variable `ALLOWED_ORIGIN`: the GitHub Pages origin only, for example `https://your-name.github.io` (do not include `/asteria-tarot`).
 
 Never put the Gemini key in `app.js`, `api-config.js`, or any GitHub file.
