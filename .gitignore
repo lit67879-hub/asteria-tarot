@@ -2,4 +2,5 @@
 Thumbs.db
 *.log
 .wrangler/
+.wrangler-functions-check/
 .dev.vars
