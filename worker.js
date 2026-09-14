@@ -187,7 +187,7 @@ async function parseJson(request) {
 }
 
 async function handleReading(request, env) {
-  if (!env.GEMINI_API_KEY) return json(request, env, { ok: false, error: { code: "MISSING_API_KEY", message: "AI 服务尚未配置。" } }, 503);
+  if (!env.AI) return json(request, env, { ok: false, error: { code: "MISSING_AI_BINDING", message: "AI 服务尚未配置。" } }, 503);
   if (rateLimited(request)) return json(request, env, { ok: false, error: { code: "RATE_LIMITED", message: "请求过于频繁，请稍后再试。" } }, 429);
 
   let input;
@@ -199,34 +199,39 @@ async function handleReading(request, env) {
   const validationError = validateReading(input);
   if (validationError) return json(request, env, { ok: false, error: { code: "INVALID_READING", message: validationError } }, 400);
 
-  const model = String(env.GEMINI_MODEL || "gemini-2.5-flash");
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
+  const model = String(env.AI_MODEL || "@cf/qwen/qwen3-30b-a3b-fp8");
   const payload = {
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    contents: [{ role: "user", parts: [{ text: buildPrompt(normalizeReading(input)) }] }],
-    generationConfig: { temperature: 0.65, topP: 0.9, maxOutputTokens: 800 }
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: buildPrompt(normalizeReading(input)) }
+    ],
+    temperature: 0.65,
+    top_p: 0.9,
+    max_tokens: 900
   };
 
   try {
-    const upstream = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(GENERATION_TIMEOUT_MS)
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("AI_TIMEOUT")), GENERATION_TIMEOUT_MS);
     });
-    const result = await upstream.json().catch(() => ({}));
-    if (!upstream.ok) {
-      console.error("Gemini request failed", upstream.status, result?.error?.status || "");
-      const message = upstream.status === 429 ? "AI 当前额度已用完，请稍后再试。" : "AI 暂时不可用，已保留基础牌义解读。";
-      return json(request, env, { ok: false, error: { code: upstream.status === 429 ? "AI_RATE_LIMITED" : "AI_UNAVAILABLE", message } }, upstream.status === 429 ? 429 : 503);
-    }
-    const content = result?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+    const result = await Promise.race([env.AI.run(model, payload), timeout]);
+    const content = result?.response
+      || result?.choices?.[0]?.message?.content
+      || result?.choices?.[0]?.text
+      || "";
     const reading = finalContent(content);
     if (reading.length < 80) return json(request, env, { ok: false, error: { code: "AI_INCOMPLETE", message: "AI 返回内容不完整，已保留基础牌义解读。" } }, 503);
-    return json(request, env, { ok: true, reading: reading.slice(0, 12_000), model, displayModel: "Gemini" });
+    return json(request, env, { ok: true, reading: reading.slice(0, 12_000), model, displayModel: "Cloudflare Workers AI" });
   } catch (error) {
-    console.error("Gemini request exception", error?.message || error);
-    return json(request, env, { ok: false, error: { code: "AI_UNAVAILABLE", message: "AI 暂时不可用，已保留基础牌义解读。" } }, 503);
+    console.error("Workers AI request exception", error?.message || error);
+    const limited = /429|rate|limit|quota/i.test(String(error?.message || error));
+    return json(request, env, {
+      ok: false,
+      error: {
+        code: limited ? "AI_RATE_LIMITED" : "AI_UNAVAILABLE",
+        message: limited ? "AI 当前免费额度已用完，请稍后再试。" : "AI 暂时不可用，已保留基础牌义解读。"
+      }
+    }, limited ? 429 : 503);
   }
 }
 
@@ -236,7 +241,7 @@ export default {
     const url = new URL(request.url);
     if (!clientAllowed(request, env)) return json(request, env, { ok: false, error: { code: "ORIGIN_NOT_ALLOWED", message: "来源未获授权。" } }, 403);
     if (request.method === "GET" && url.pathname === "/api/health") {
-      return json(request, env, { ok: Boolean(env.GEMINI_API_KEY), service: "asteria-gemini", model: String(env.GEMINI_MODEL || "gemini-2.5-flash") }, env.GEMINI_API_KEY ? 200 : 503);
+      return json(request, env, { ok: Boolean(env.AI), service: "asteria-workers-ai", model: String(env.AI_MODEL || "@cf/qwen/qwen3-30b-a3b-fp8") }, env.AI ? 200 : 503);
     }
     if (request.method === "POST" && url.pathname === "/api/reading") return handleReading(request, env);
     if (request.method === "POST" && url.pathname === "/api/feedback") {

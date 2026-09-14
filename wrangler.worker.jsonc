@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "asteria-tarot-api",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-14",
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "ALLOWED_ORIGIN": "https://lit67879-hub.github.io",
+    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"
+  }
+}
