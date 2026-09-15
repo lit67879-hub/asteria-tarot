@@ -3,36 +3,79 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="description" content="ASTERIA，一款用于自我反思的本地塔罗抽牌工具。" />
+    <meta name="description" content="ASTERIA，一款用于自我反思的塔罗抽牌工具。" />
     <meta name="theme-color" content="#08080f" />
     <title>ASTERIA | Tarot for reflection</title>
     <link rel="icon" href="data:," />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?preview=20260914-home-card-position-v11" />
+    <link rel="stylesheet" href="style.css?preview=20260916-theme-shrink-v1" />
   </head>
   <body>
-    <video
-      id="purpose-bg"
-      class="purpose-bg"
-      aria-hidden="true"
-      autoplay
-      muted
-      loop
-      playsinline
-      preload="metadata"
-      src="assets/inspiration/purpose_gathers.mp4"
-    ></video>
+    <div id="purpose-scene" class="purpose-scene" aria-hidden="true">
+      <img
+        id="purpose-image"
+        class="purpose-image"
+        src="assets/purpose_gathers.webp"
+        alt=""
+        decoding="async"
+        fetchpriority="high"
+        aria-hidden="true"
+      />
+      <div
+        id="unicorn-purpose"
+        class="unicorn-purpose"
+        data-us-project="SDdj4oEF4mv4vuO8AaOz"
+        data-us-arialabel="Where Purpose Gathers"
+      ></div>
+      <canvas id="purpose-bg" class="purpose-bg"></canvas>
+      <div class="purpose-copy">
+        <span>Where</span>
+        <span>Purpose</span>
+        <span>Gathers.</span>
+      </div>
+      <p class="purpose-caption">ASTERIA · PRIVATE REFLECTION · MMXXVI</p>
+    </div>
     <div class="sky-base" aria-hidden="true"></div>
     <div id="galaxy" class="galaxy-container" aria-hidden="true"></div>
     <div class="sky-vignette" aria-hidden="true"></div>
     <main id="app" tabindex="-1"></main>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-      <script src="api-config.js?v=b061a9c"></script>
+    <script src="api-config.js"></script>
     <script src="vendor/gsap/gsap.min.js"></script>
     <script src="vendor/gsap/Flip.min.js"></script>
     <script src="vendor/gsap/MotionPathPlugin.min.js"></script>
-    <script type="module" src="app.js?preview=20260914-3d-stack-v2"></script>
+    <script type="text/javascript">
+      !function(){
+        if(new URLSearchParams(window.location.search).get("unicorn")!=="1")return;
+        function boot(){
+          var u=window.UnicornStudio;
+          if(!u||!u.init)return;
+          try{
+            window.__asteriaUnicornInitPromise=Promise.resolve(u.init());
+            window.__asteriaUnicornInitPromise.catch(function(error){
+              console.warn("Unicorn Studio runtime failed to initialize.", error);
+              window.dispatchEvent(new CustomEvent("unicornstudio:error"));
+            });
+          }catch(error){
+            console.warn("Unicorn Studio runtime failed to initialize.", error);
+            window.dispatchEvent(new CustomEvent("unicornstudio:error"));
+          }
+        }
+        if(window.UnicornStudio&&window.UnicornStudio.init){
+          if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot);
+          else boot();
+        }else{
+          window.UnicornStudio={isInitialized:!1};
+          var i=document.createElement("script");
+          i.src="https://cdn.jsdelivr.net/gh/hiunicornstudio/unicornstudio.js@v2.2.14/dist/unicornStudio.umd.js";
+          i.onload=boot;
+          i.onerror=function(){window.dispatchEvent(new CustomEvent("unicornstudio:error"))};
+          (document.head||document.body).appendChild(i)
+        }
+      }();
+    </script>
+    <script type="module" src="app.js?preview=20260916-theme-shrink-v1"></script>
   </body>
 </html>

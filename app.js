@@ -3,6 +3,7 @@ import { Program } from "./vendor/ogl/src/core/Program.js";
 import { Mesh } from "./vendor/ogl/src/core/Mesh.js";
 import { Color } from "./vendor/ogl/src/math/Color.js";
 import { Triangle } from "./vendor/ogl/src/extras/Triangle.js";
+import { createPurposeRelief } from "./purpose-relief.js?preview=20260914-purpose-relief-v3";
 // Keep the local preview's ES-module graph fresh after animation edits. The
 // dev server sends no-store headers, but a few embedded Chromium profiles can
 // still retain module records for the lifetime of a tab.
@@ -11,8 +12,22 @@ import { createThreeCardStack } from "./three-card-stack.js?preview=20260914-3d-
 const APP = document.querySelector("#app");
 const TOAST = document.querySelector("#toast");
 const GALAXY = document.querySelector("#galaxy");
+const PURPOSE_SCENE = document.querySelector("#purpose-scene");
+const PURPOSE_IMAGE = document.querySelector("#purpose-image");
+const PURPOSE_BG = document.querySelector("#purpose-bg");
+const UNICORN_PURPOSE = document.querySelector("#unicorn-purpose");
+const USE_UNICORN_PURPOSE = new URLSearchParams(window.location.search).get("unicorn") === "1";
+let purposeImageReady = Boolean(PURPOSE_IMAGE?.complete && PURPOSE_IMAGE.naturalWidth > 0);
+let purposeImageFailed = Boolean(PURPOSE_IMAGE?.complete && !PURPOSE_IMAGE.naturalWidth);
 const CARD_ANIMATION = window.gsap;
 const API_BASE = String(window.ASTERIA_API_BASE || "").replace(/\/+$/, "");
+
+const unicornPurposeState = {
+  status: "pending",
+  startedAt: 0,
+  retryTimer: 0,
+  timeoutTimer: 0
+};
 
 function apiUrl(pathname) {
   return `${API_BASE}${pathname}`;
@@ -110,7 +125,7 @@ const deck = [
     en,
     meaning,
     group: "大阿尔卡那",
-    image: `assets/tarot/major-${index}.jpg`
+    image: `assets/tarot-art/major-${index}.jpg`
   })),
   ...suitData.flatMap((suit) =>
     rankData.map(([rank, enRank, rankMeaning], index) => ({
@@ -119,7 +134,7 @@ const deck = [
       en: `${enRank} of ${suit.en}`,
       meaning: `${suit.theme}，并呈现出${rankMeaning}`,
       group: suit.zh,
-      image: `assets/tarot/${suit.id}-${index + 1}.jpg`
+      image: `assets/tarot-art/${suit.id}-${index + 1}.jpg`
     }))
   )
 ];
@@ -147,12 +162,22 @@ const state = {
   selectedSpread: "core",
   question: "",
   selectedProfiles: [],
+  profileDraft: {
+    id: "",
+    type: "self",
+    nickname: "",
+    gender: "",
+    zodiac: "",
+    relationshipStatus: "",
+    touched: {}
+  },
   context: {
     gender: "",
     zodiac: "",
     relationshipStatus: "",
     optionalText: ""
   },
+  historyFilter: "all",
   validationMessage: "",
   deckOrder: [],
   picks: [],
@@ -165,6 +190,9 @@ const state = {
 
 let screenCleanup = () => {};
 let galaxyController = null;
+let purposeController = null;
+let themeTimeline = null;
+let themeCooldownTimer = 0;
 const activeCardFlights = new Set();
 let galaxyPausedForCardFlight = false;
 const activeAiReadingIds = new Set();
@@ -237,21 +265,183 @@ function effectiveTheme() {
   return preference;
 }
 
-function applyTheme() {
+function showUnicornPurpose() {
+  return Boolean(
+    document.body.classList.contains("light")
+      && document.body.dataset.screen === "home"
+      && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function showPurposeImage() {
+  return Boolean(
+    PURPOSE_IMAGE
+      && purposeImageReady
+      && !purposeImageFailed
+      && document.body.classList.contains("light")
+      && (!USE_UNICORN_PURPOSE || document.body.dataset.screen !== "home")
+  );
+}
+
+function syncPurposeImage() {
+  if (!PURPOSE_IMAGE) return false;
+  const active = showPurposeImage();
+  PURPOSE_IMAGE.setAttribute("aria-hidden", String(!active));
+  return active;
+}
+
+function unicornCanvasReady() {
+  return Boolean(UNICORN_PURPOSE?.querySelector("canvas"));
+}
+
+function markUnicornPurposeReady() {
+  if (!UNICORN_PURPOSE || !unicornCanvasReady()) return false;
+  unicornPurposeState.status = "ready";
+  PURPOSE_SCENE?.classList.add("has-unicorn");
+  syncPurposeBackground();
+  return true;
+}
+
+function markUnicornPurposeFailed() {
+  if (!UNICORN_PURPOSE || unicornPurposeState.status === "ready") return;
+  unicornPurposeState.status = "failed";
+  PURPOSE_SCENE?.classList.remove("has-unicorn");
+  syncPurposeBackground();
+}
+
+function waitForUnicornCanvas() {
+  if (markUnicornPurposeReady()) return;
+  if (Date.now() - unicornPurposeState.startedAt > 12000) {
+    markUnicornPurposeFailed();
+    return;
+  }
+  unicornPurposeState.retryTimer = window.setTimeout(waitForUnicornCanvas, 120);
+}
+
+function initUnicornPurpose() {
+  if (!USE_UNICORN_PURPOSE) return;
+  if (!UNICORN_PURPOSE || unicornPurposeState.status === "loading" || unicornPurposeState.status === "ready") return;
+  if (!unicornPurposeState.startedAt) unicornPurposeState.startedAt = Date.now();
+  const runtime = window.UnicornStudio;
+  if (!runtime || typeof runtime.init !== "function") {
+    if (Date.now() - unicornPurposeState.startedAt > 12000) {
+      markUnicornPurposeFailed();
+      return;
+    }
+    unicornPurposeState.retryTimer = window.setTimeout(initUnicornPurpose, 120);
+    return;
+  }
+
+  unicornPurposeState.status = "loading";
+  const runtimeInit = window.__asteriaUnicornInitPromise || Promise.resolve(runtime.init());
+  runtimeInit
+    .then(() => waitForUnicornCanvas())
+    .catch((error) => {
+      console.warn("Unicorn Studio scene could not start; local relief fallback remains active.", error);
+      markUnicornPurposeFailed();
+    });
+  unicornPurposeState.timeoutTimer = window.setTimeout(() => {
+    if (unicornPurposeState.status === "loading") markUnicornPurposeFailed();
+  }, 12500);
+}
+
+function syncPurposeBackground() {
+  const shouldAnimate = showUnicornPurpose();
+  const useImage = syncPurposeImage();
+  const useUnicorn = !useImage && USE_UNICORN_PURPOSE && shouldAnimate && unicornPurposeState.status === "ready";
+  PURPOSE_SCENE?.classList.toggle("is-active", shouldAnimate);
+  PURPOSE_SCENE?.classList.toggle("has-image", useImage);
+  PURPOSE_SCENE?.classList.toggle("has-unicorn", useUnicorn);
+  if (UNICORN_PURPOSE) UNICORN_PURPOSE.setAttribute("aria-hidden", String(!useUnicorn));
+  purposeController?.setActive(shouldAnimate && !useImage && !useUnicorn);
+}
+
+function applyTheme({ syncPurpose = true } = {}) {
   const isLight = effectiveTheme() === "light";
   document.body.classList.toggle("light", isLight);
   document.querySelector('meta[name="theme-color"]').content = isLight ? "#ffffff" : "#08080f";
   galaxyController?.setLightMode(isLight);
+  if (!document.body.classList.contains("theme-transitioning") && !galaxyPausedForCardFlight) {
+    if (isLight) galaxyController?.pause?.();
+    else galaxyController?.resume?.();
+  }
+  if (syncPurpose) syncPurposeBackground();
+}
+
+function startThemeCooldown(source) {
+  if (!source) return;
+  window.clearTimeout(themeCooldownTimer);
+  source.classList.add("theme-cooldown");
+  themeCooldownTimer = window.setTimeout(() => {
+    source.classList.remove("theme-cooldown");
+    themeCooldownTimer = 0;
+  }, 1000);
 }
 
 function toggleTheme(source) {
-  source?.classList.add("theme-spinning");
+  if (themeTimeline) return;
   const next = effectiveTheme() === "light" ? "dark" : "light";
   write(KEYS.preferences, { ...getPreferences(), theme: next });
-  window.setTimeout(() => {
+
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!source || !CARD_ANIMATION || reduceMotion) {
     applyTheme();
-    source?.classList.remove("theme-spinning");
-  }, 150);
+    startThemeCooldown(source);
+    return;
+  }
+
+  let themeApplied = false;
+  const transitionClock = { progress: 0 };
+  const resumeGalaxy = !galaxyPausedForCardFlight;
+  const applyNextTheme = () => {
+    if (themeApplied) return;
+    themeApplied = true;
+    applyTheme({ syncPurpose: false });
+  };
+  const finishThemeSpin = () => {
+    applyNextTheme();
+    startThemeCooldown(source);
+    CARD_ANIMATION.set(source, { clearProps: "transform" });
+    source.classList.remove("theme-spinning");
+    document.body.classList.remove("theme-transitioning");
+    syncPurposeBackground();
+    if (resumeGalaxy && effectiveTheme() === "dark") {
+      window.requestAnimationFrame(() => galaxyController?.resume?.());
+    }
+    themeTimeline = null;
+  };
+
+  if (resumeGalaxy) galaxyController?.pause?.();
+  purposeController?.setActive?.(false);
+  document.body.classList.add("theme-transitioning");
+  source.classList.add("theme-spinning");
+
+  themeTimeline = CARD_ANIMATION.timeline({
+    defaults: { ease: "power2.inOut" },
+    onComplete: finishThemeSpin,
+    onInterrupt: finishThemeSpin
+  });
+  themeTimeline
+    .to(source, {
+      rotation: "+=360",
+      duration: 0.64,
+      force3D: true,
+      overwrite: "auto"
+    }, 0)
+    .call(applyNextTheme)
+    .to(source, {
+      x: 0,
+      y: 0,
+      scale: 1,
+      duration: 0.42,
+      ease: "power2.out",
+      force3D: true
+    })
+    .to(transitionClock, {
+      progress: 1,
+      duration: 0.42,
+      ease: "none"
+    }, "<");
 }
 
 function getUsage() {
@@ -284,6 +474,69 @@ function allProfiles() {
   return [profiles.self, ...profiles.guests].filter(Boolean);
 }
 
+function profileTypeLabel(type) {
+  return type === "self" ? "本人" : "嘉宾";
+}
+
+function profileTitle(profile) {
+  return profile.nickname || (profile.type === "self" ? "本人档案" : "未命名嘉宾");
+}
+
+function profileDetails(profile) {
+  return [profileTypeLabel(profile.type), profile.gender, profile.zodiac, profile.relationshipStatus]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function profileDraftHasContent(draft = state.profileDraft) {
+  return [draft?.nickname, draft?.gender, draft?.zodiac, draft?.relationshipStatus]
+    .some((value) => String(value || "").trim());
+}
+
+function syncQuestionProfileContext() {
+  const draft = state.profileDraft;
+  state.context.gender = draft.gender;
+  state.context.zodiac = draft.zodiac;
+  state.context.relationshipStatus = draft.relationshipStatus;
+}
+
+function autoSaveQuestionProfile() {
+  const draft = state.profileDraft;
+  if (!draft) return;
+
+  const profiles = getProfiles();
+  const now = new Date().toISOString();
+  const fields = ["nickname", "gender", "zodiac", "relationshipStatus"];
+  const existing = draft.type === "self"
+    ? profiles.self
+    : profiles.guests.find((profile) => profile.id === draft.id);
+  if (!existing && !profileDraftHasContent(draft)) return;
+  const id = existing?.id || draft.id || uid();
+  const profile = {
+    ...(existing || {}),
+    id,
+    type: draft.type === "self" ? "self" : "guest",
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
+  };
+
+  fields.forEach((field) => {
+    if (!existing || draft.touched[field]) profile[field] = String(draft[field] || "").trim();
+  });
+
+  if (profile.type === "self") {
+    profiles.self = profile;
+  } else if (existing) {
+    profiles.guests = profiles.guests.map((item) => item.id === id ? profile : item);
+  } else {
+    profiles.guests.push(profile);
+  }
+
+  draft.id = id;
+  draft.touched = {};
+  write(KEYS.profiles, profiles);
+}
+
 function pruneReadings(readings) {
   const now = Date.now();
   return readings.filter((reading) => !reading.expiresAt || new Date(reading.expiresAt).getTime() > now);
@@ -302,10 +555,13 @@ function cardFor(item) {
 
 function classicCard(card, options = {}) {
   const reversedClass = options.orientation === "reversed" ? " is-reversed" : "";
+  const thumbnailClass = options.thumbnail ? " is-thumbnail" : "";
   const loading = options.eager ? "eager" : "lazy";
-  return `<span class="classic-card">
-    <span class="card-art-wrap"><img class="card-art${reversedClass}" src="${card.image}" alt="" loading="${loading}" draggable="false" /></span>
-    <span class="card-title">${escapeHTML(card.en)}</span>
+  return `<span class="classic-card${thumbnailClass}${reversedClass}">
+    <span class="card-frame">
+      <span class="card-art-wrap"><img class="card-art" src="${card.image}" alt="" loading="${loading}" draggable="false" /></span>
+      <span class="card-title">${escapeHTML(card.en)}</span>
+    </span>
   </span>`;
 }
 
@@ -340,11 +596,11 @@ function renderHome() {
   return `<section class="home" aria-label="ASTERIA 首页">
     <div class="home-stage">
       ${cards}
-      <div class="home-center">
-        <h1 class="brand-word">ASTERIA</h1>
-        <p class="home-tagline">LET THE CARDS MEET THE QUESTION</p>
-        <button class="continue-link" data-action="start">CONTINUE</button>
-      </div>
+    </div>
+    <div class="home-center">
+      <h1 class="brand-word">ASTERIA</h1>
+      <p class="home-tagline">LET THE CARDS MEET THE QUESTION</p>
+      <button class="continue-link" data-action="start">CONTINUE</button>
     </div>
   </section>`;
 }
@@ -352,14 +608,14 @@ function renderHome() {
 function renderQuestion() {
   const usage = getUsage();
   const profiles = allProfiles();
-  const detailsOpen = state.selectedProfiles.length || Object.values(state.context).some(Boolean);
+  const draft = state.profileDraft;
+  const detailsOpen = state.selectedProfiles.length || Object.values(state.context).some(Boolean) || profileDraftHasContent(draft);
   const profileOptions = profiles.length
     ? profiles.map((profile) => {
       const selected = state.selectedProfiles.includes(profile.id);
-      const title = profile.nickname || (profile.type === "self" ? "本人档案" : "未命名嘉宾");
       return `<button class="profile-option${selected ? " selected" : ""}" data-action="select-profile" data-id="${profile.id}" aria-pressed="${selected}">
         <span class="check">${selected ? "✓" : ""}</span>
-        <span>${escapeHTML(title)}${profile.zodiac ? ` · ${escapeHTML(profile.zodiac)}` : ""}</span>
+        <span class="profile-option-copy"><strong>${escapeHTML(profileTitle(profile))}</strong><small>${escapeHTML(profileDetails(profile) || "未填写")}</small></span>
       </button>`;
     }).join("")
     : '<span class="help-text">还没有本地档案。</span><button class="text-link" data-action="profiles">创建档案</button>';
@@ -368,7 +624,7 @@ function renderQuestion() {
     <div class="page-heading">
       <p class="eyebrow">STEP 01 · ASK</p>
       <h2>这次，你想看清什么？</h2>
-      <p class="page-lead">选择一种牌阵，再把问题说得具体一些。内容只在当前浏览器与本机 AI 服务中使用。</p>
+      <p class="page-lead">选择一种牌阵，再把问题说得具体一些。</p>
     </div>
     <div class="content-panel">
       <section class="form-section" aria-labelledby="spread-label">
@@ -385,7 +641,6 @@ function renderQuestion() {
         <div class="field">
           <label for="question">占卜问题</label>
           <textarea id="question" maxlength="300" placeholder="例如：我现在该如何理解这段关系里的距离感？">${escapeHTML(state.question)}</textarea>
-          <small>避免填写姓名、联系方式、地址或其他可识别个人的信息。</small>
         </div>
       </section>
       <section class="form-section">
@@ -394,19 +649,22 @@ function renderQuestion() {
           <div class="context-inner">
             <p class="field-label">使用已保存档案，最多选择 3 个</p>
             <div class="profile-options">${profileOptions}</div>
-            <div class="form-grid">
-              ${contextDropdown("zodiac", "星座", ["", ...zodiacOptions()], state.context.zodiac, "✦", true)}
-              ${contextDropdown("relationship", "情感状态", ["", "单身", "暧昧中", "恋爱中", "已婚", "分手后", "关系复杂"], state.context.relationshipStatus, "♡")}
-              ${contextDropdown("gender", "性别", ["", "女性", "男性", "非二元", "不便说明"], state.context.gender, "◌")}
+            <div class="question-profile-form">
+              ${contextDropdown("profile-type", "档案类型", [{ value: "self", label: "本人" }, { value: "guest", label: "嘉宾" }], draft.type, "☾", false, "question-profile")}
+              <div class="field"><label for="profile-nickname">自定义昵称</label><input id="profile-nickname" data-question-profile-field="nickname" maxlength="20" placeholder="选填" value="${escapeHTML(draft.nickname)}" /></div>
+              ${contextDropdown("profile-zodiac", "星座", ["", ...zodiacOptions()], draft.zodiac, "✦", true, "question-profile")}
+              ${contextDropdown("profile-gender", "性别", ["", "女性", "男性", "非二元", "不便说明"], draft.gender, "●", false, "question-profile")}
+              ${contextDropdown("profile-relationship", "情感状态", ["", "单身", "暧昧中", "恋爱中", "已婚", "分手后", "关系复杂"], draft.relationshipStatus, "♥", false, "question-profile")}
             </div>
             <div class="field">
               <label for="optional-context">自由补充</label>
-              <textarea id="optional-context" maxlength="240" placeholder="写下你愿意提供的背景，不必填写敏感信息。">${escapeHTML(state.context.optionalText)}</textarea>
+              <textarea id="optional-context" maxlength="240" placeholder="写下你愿意提供的背景">${escapeHTML(state.context.optionalText)}</textarea>
+              <small>请勿填写姓名、联系方式、地址或其他可识别个人的信息。</small>
             </div>
           </div>
         </details>
       </section>
-      <div class="notice">今日本机已完成 ${usage.completedCount} / 3 次。本地计数仅用于原型体验，正式版还需服务端限流。</div>
+      <div class="notice">今日已占卜 ${usage.completedCount} / 3 次。</div>
       ${state.validationMessage ? `<div class="notice warning" role="alert">${escapeHTML(state.validationMessage)}</div>` : ""}
       <div class="form-actions">
         <button class="secondary" data-action="home">返回</button>
@@ -432,6 +690,9 @@ function contextDropdown(key, label, options, current, icon, searchable = false,
   const profileInput = scope === "profile"
     ? `<input type="hidden" id="${key}" value="${escapeHTML(current)}" data-profile-input />`
     : "";
+  const historyInput = scope === "history"
+    ? `<input type="hidden" id="${key}" value="${escapeHTML(current || "all")}" data-history-input />`
+    : "";
   return `<div class="field context-dropdown" data-context-dropdown="${key}" data-dropdown-scope="${scope}">
     <label id="context-label-${key}">${label}</label>
     <button type="button" class="context-trigger" data-action="toggle-context-dropdown" data-context="${key}" aria-haspopup="listbox" aria-expanded="false" aria-controls="${menuId}">
@@ -441,7 +702,7 @@ function contextDropdown(key, label, options, current, icon, searchable = false,
     <div class="context-menu" id="${menuId}" role="listbox" aria-labelledby="context-label-${key}" hidden>
       ${searchable ? `<label class="context-search-wrap"><span class="context-search-icon" aria-hidden="true">⌕</span><input class="context-search" type="search" placeholder="搜索星座" aria-label="搜索星座" data-context-search="${key}" /></label>` : ""}
       <div class="context-options">${optionMarkup}</div>
-    </div>${profileInput}
+    </div>${profileInput}${historyInput}
   </div>`;
 }
 
@@ -496,6 +757,10 @@ function renderDraw() {
       <div class="draw-center-copy">
         <h2>${spread.name}</h2>
         <p id="remaining-copy">${remainingCopy()}</p>
+        <p class="draw-gesture-hint" id="draw-gesture-hint"${spreads[state.selectedSpread].positions.length - state.picks.length <= 0 ? " hidden" : ""}>
+          <span class="draw-gesture-hint-mouse">滑动鼠标或拖拽以进行选牌。</span>
+          <span class="draw-gesture-hint-touch">左右滑动查看，点按选牌。</span>
+        </p>
       </div>
       <div class="selection-zone selection-${spread.positions.length}" id="selection-zone" aria-label="已抽取的背面牌"></div>
       <button class="primary draw-confirm" id="draw-confirm" data-action="confirm-draw" disabled>确认并翻牌</button>
@@ -512,23 +777,24 @@ function readingCopyMarkup(reading) {
   const paragraphs = String(reading.aiReading || "").split(/\n\s*\n/).filter(Boolean);
   const loading = reading.aiStatus === "loading";
   const success = reading.aiStatus === "success";
-  const modelDisplay = reading.aiModelDisplay || "AI";
-  const status = loading ? "AI · 正在生成解读" : success ? `AI · ${modelDisplay}` : "基础牌义兜底 · AI 暂不可用";
+  const status = loading ? "· 正在生成解读" : success ? "" : "LOCAL FALLBACK · AI 暂不可用";
   const body = loading
-    ? '<div class="reading-loading" role="status"><p>AI 正在结合问题、牌位与正逆位生成解读…</p><span></span><span></span><span></span></div>'
+    ? '<div class="reading-loading" role="status"><span></span><span></span><span></span></div>'
     : `<div class="reading-paragraphs">${paragraphs.map((paragraph) => `<p>${escapeHTML(paragraph)}</p>`).join("")}</div>`;
   const disclaimer = loading
     ? ""
     : success
-      ? modelDisplay.includes("Cloudflare")
-        ? "以上内容由 Cloudflare Workers AI 托管的 Qwen 生成，只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。"
-        : "以上内容由本机 Ollama / Qwen 生成，只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。"
-      : "本次 AI 未能完成生成，以上内容由浏览器内的基础牌义组合生成。它只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。";
+      ? "解读只用于自我反思，不构成对未来的承诺，也不能替代医疗、法律、心理或财务等专业意见。"
+      : "";
+  const statusMarkup = status
+    ? `<div class="reading-status${loading ? " is-loading" : ""}" aria-live="polite"><span class="status-dot"></span>${escapeHTML(status)}</div>`
+    : "";
+  const disclaimerMarkup = disclaimer ? `<p class="disclaimer">${escapeHTML(disclaimer)}</p>` : "";
 
   return `
-    <div class="reading-status${loading ? " is-loading" : ""}" aria-live="polite"><span class="status-dot"></span>${escapeHTML(status)}</div>
+    ${statusMarkup}
     ${body}
-    <p class="disclaimer">${escapeHTML(disclaimer)}</p>
+    ${disclaimerMarkup}
     <div class="reading-actions">
       <button class="secondary" data-action="history">查看历史记录</button>
       <button class="primary" data-action="start-again">再次占卜</button>
@@ -600,9 +866,8 @@ function renderPolicy() {
       <p class="page-lead">关于你的数据、解读来源和这项工具的边界。</p>
     </div>
     <div class="policy-sections">
-      <section class="policy-section"><h3>隐私政策</h3><p>占卜记录、身份档案、昼夜偏好和每日次数保存在当前浏览器；生成解读时，本次问题、牌面和你主动选择的补充信息会发送到这台电脑上的本地服务。记录最多保留两年；清除浏览器数据或更换设备后无法恢复。请不要输入姓名、联系方式、地址、证件号码、账号或其他可识别个人的信息。</p></section>
-      <section class="policy-section"><h3>AI 服务说明</h3><p>正式发布版本使用 Cloudflare Workers AI 托管的 Qwen 生成解读；本地预览则使用本机 Ollama 与 Qwen。若 AI 服务暂时不可用，页面会保留基础牌义解读。问题、牌面和主动填写的补充信息会发送到对应的 AI 服务，请不要输入可识别个人的信息。</p></section>
-      <section class="policy-section"><h3>内容免责声明</h3><p>ASTERIA 用于自我反思和梳理当下，不预知未来，不替代医疗、法律、心理、财务或其他专业意见。医疗、年龄、博彩、考试结果、抽奖、法律、投资、自伤和他人安全类问题不会进入常规解读。</p></section>
+      <section class="policy-section"><h3>隐私政策</h3><p>请不要输入姓名、联系方式、地址、证件号码、账号或其他可识别个人的信息。</p></section>
+      <section class="policy-section"><h3>内容免责声明</h3><p>ASTERIA 用于自我反思和梳理当下，不预知未来，不替代医疗、法律、心理、财务或其他专业意见。</p></section>
     </div>
   `);
 }
@@ -613,15 +878,14 @@ function renderProfiles() {
     <div class="page-heading">
       <p class="eyebrow">LOCAL PROFILES</p>
       <h2>信息档案</h2>
-      <p class="page-lead">无需登录。所有字段均为选填，档案只保存在当前浏览器；本人档案最多一个，嘉宾档案可创建多个。</p>
     </div>
     <div class="content-panel">
       <div class="profile-form">
-        ${contextDropdown("profile-type", "档案类型", [{ value: "self", label: "本人" }, { value: "guest", label: "嘉宾" }], "self", "◈", false, "profile")}
+        ${contextDropdown("profile-type", "档案类型", [{ value: "self", label: "本人" }, { value: "guest", label: "嘉宾" }], "self", "☾", false, "profile")}
         <div class="field"><label for="profile-nickname">自定义昵称</label><input id="profile-nickname" maxlength="20" placeholder="选填" /></div>
         ${contextDropdown("profile-zodiac", "星座", ["", ...zodiacOptions()], "", "✦", true, "profile")}
-        ${contextDropdown("profile-gender", "性别", ["", "女性", "男性", "非二元", "不便说明"], "", "◌", false, "profile")}
-        ${contextDropdown("profile-relationship", "情感状态", ["", "单身", "暧昧中", "恋爱中", "已婚", "分手后", "关系复杂"], "", "♡", false, "profile")}
+        ${contextDropdown("profile-gender", "性别", ["", "女性", "男性", "非二元", "不便说明"], "", "●", false, "profile")}
+        ${contextDropdown("profile-relationship", "情感状态", ["", "单身", "暧昧中", "恋爱中", "已婚", "分手后", "关系复杂"], "", "♥", false, "profile")}
         <button class="primary" data-action="save-profile">保存档案</button>
       </div>
       <div class="profile-list" id="profile-list">
@@ -632,11 +896,9 @@ function renderProfiles() {
 }
 
 function profileRow(profile) {
-  const title = profile.nickname || (profile.type === "self" ? "本人档案" : "未命名嘉宾");
-  const details = [profile.type === "self" ? "本人" : "嘉宾", profile.gender, profile.zodiac, profile.relationshipStatus].filter(Boolean).join(" · ");
   return `<article class="profile-row">
     <span class="profile-avatar">${escapeHTML(profile.zodiac?.slice(0, 1) || (profile.type === "self" ? "我" : "客"))}</span>
-    <div><h3>${escapeHTML(title)}</h3><p>${escapeHTML(details)}</p></div>
+    <div><h3>${escapeHTML(profileTitle(profile))}</h3><p>${escapeHTML(profileDetails(profile) || "未填写")}</p></div>
     <button class="small-action delete" data-action="delete-profile" data-id="${profile.id}">删除</button>
   </article>`;
 }
@@ -646,7 +908,7 @@ function renderFeedback() {
     <div class="page-heading">
       <p class="eyebrow">FEEDBACK & SUPPORT</p>
       <h2>反馈与客服</h2>
-      <p class="page-lead">告诉我们哪里不顺手，或你希望 ASTERIA 接下来变得怎样。邮箱不是必填项。</p>
+      <p class="page-lead">告诉我们哪里不顺手，或你希望 ASTERIA 接下来变得怎样。</p>
     </div>
     <div class="content-panel feedback-form">
       <div class="field">
@@ -654,7 +916,7 @@ function renderFeedback() {
         <textarea id="feedback-content" maxlength="1000" placeholder="请尽量描述你遇到的页面、操作和实际情况。"></textarea>
         <small><span id="feedback-count">0</span> / 1000</small>
       </div>
-      <div id="feedback-status" class="notice">本地预览尚未配置反馈后台。提交时会如实检查服务状态，不会伪造“已收到”。</div>
+      <div id="feedback-status" class="notice" aria-live="polite"></div>
       <div class="form-actions"><button class="primary" id="feedback-submit" data-action="submit-feedback">提交反馈</button></div>
     </div>
   `);
@@ -665,15 +927,15 @@ function renderHistory() {
     <div class="page-heading">
       <p class="eyebrow">YOUR ARCHIVE</p>
       <h2>历史记录</h2>
-      <p class="page-lead">记录按时间倒序保存在当前浏览器，最长保留两年。</p>
+    <p class="page-lead">记录按时间倒序保存。</p>
     </div>
     <div class="content-panel">
       <div class="history-toolbar">
         <input id="history-search" type="search" placeholder="搜索问题关键词" aria-label="搜索问题关键词" />
-        <select id="history-filter" aria-label="按牌阵筛选">
-          <option value="all">全部牌阵</option>
-          ${Object.values(spreads).map((spread) => `<option value="${spread.id}">${spread.name}</option>`).join("")}
-        </select>
+        ${contextDropdown("history-filter", "按牌阵筛选", [
+          { value: "all", label: "全部牌阵" },
+          ...Object.values(spreads).map((spread) => ({ value: spread.id, label: spread.name }))
+        ], state.historyFilter, "▦", false, "history")}
         <button class="danger" data-action="clear-history">清空全部</button>
       </div>
       <div class="history-list" id="history-list">${historyItems(getReadings())}</div>
@@ -686,11 +948,13 @@ function historyItems(readings) {
   if (!sorted.length) return '<div class="empty-state">还没有记录。完成第一次抽牌后，它会出现在这里。</div>';
   return sorted.map((reading) => {
     const hydrated = hydrateReading(reading);
-    const thumbnails = hydrated.cards.slice(0, 4).map((item) => `<span class="history-thumb"><img src="${item.card.image}" alt="" loading="lazy" /></span>`).join("");
+    const thumbnails = hydrated.cards.slice(0, 4).map((item) => `<span class="history-thumb">${classicCard(item.card, { thumbnail: true, orientation: item.orientation })}</span>`).join("");
     const spread = spreads[hydrated.spreadId] || spreads.core;
+    const aiStatus = hydrated.aiStatus === "success" ? "AI 解读" : hydrated.aiStatus === "loading" ? "AI 生成中" : "";
+    const historyMeta = [formatDate(hydrated.createdAt), spread.name, aiStatus].filter(Boolean).join(" · ");
     return `<article class="history-item">
       <div class="history-thumbs" aria-hidden="true">${thumbnails}</div>
-      <div><h3>${escapeHTML(hydrated.question.slice(0, 42))}${hydrated.question.length > 42 ? "…" : ""}</h3><p class="history-meta">${formatDate(hydrated.createdAt)} · ${spread.name} · ${hydrated.aiStatus === "success" ? "AI 解读" : hydrated.aiStatus === "loading" ? "AI 生成中" : "基础牌义兜底"}</p></div>
+      <div><h3>${escapeHTML(hydrated.question.slice(0, 42))}${hydrated.question.length > 42 ? "…" : ""}</h3><p class="history-meta">${historyMeta}</p></div>
       <button class="small-action" data-action="open-reading" data-id="${hydrated.id}">查看</button>
       <button class="small-action delete" data-action="delete-reading" data-id="${hydrated.id}">删除</button>
     </article>`;
@@ -701,6 +965,7 @@ function render() {
   screenCleanup();
   screenCleanup = () => {};
   document.body.dataset.screen = state.screen;
+  syncPurposeBackground();
 
   const renderers = {
     home: renderHome,
@@ -735,6 +1000,15 @@ function navigate(screen) {
 function startSession() {
   state.question = "";
   state.selectedProfiles = [];
+  state.profileDraft = {
+    id: "",
+    type: "self",
+    nickname: "",
+    gender: "",
+    zodiac: "",
+    relationshipStatus: "",
+    touched: {}
+  };
   state.context = { gender: "", zodiac: "", relationshipStatus: "", optionalText: "" };
   state.picks = [];
   state.deckOrder = [];
@@ -857,6 +1131,28 @@ function selectContextValue(key, value) {
   if (scope === "profile") {
     const profileInput = dropdown?.querySelector("[data-profile-input]");
     if (profileInput) profileInput.value = value;
+  } else if (scope === "question-profile") {
+    const field = {
+      "profile-type": "type",
+      "profile-gender": "gender",
+      "profile-zodiac": "zodiac",
+      "profile-relationship": "relationshipStatus"
+    }[key];
+    if (field) {
+      const draft = state.profileDraft;
+      if (field === "type" && draft.type !== value) {
+        draft.id = "";
+        draft.touched = {};
+      }
+      draft[field] = field === "type" ? (value || "self") : value;
+      if (field !== "type") draft.touched[field] = true;
+      syncQuestionProfileContext();
+      autoSaveQuestionProfile();
+    }
+  } else if (scope === "history") {
+    const historyInput = dropdown?.querySelector("[data-history-input]");
+    if (historyInput) historyInput.value = value || "all";
+    state.historyFilter = value || "all";
   } else {
     if (key === "gender") state.context.gender = value;
     if (key === "zodiac") state.context.zodiac = value;
@@ -878,6 +1174,7 @@ function selectContextValue(key, value) {
     search.value = "";
     filterContextOptions(search);
   }
+  if (scope === "history") filterHistory();
   closeContextDropdowns();
   dropdown.querySelector(".context-trigger")?.focus();
 }
@@ -939,7 +1236,7 @@ function initContextDropdowns() {
 function validateQuestion() {
   const question = state.question.trim();
   if (!question) return "请先写下这次想探索的问题。";
-  if (getUsage().completedCount >= 3) return "今天在这个浏览器中已经完成 3 次占卜，请明天再来。";
+  if (getUsage().completedCount >= 3) return "今日完成 3 次占卜，明天再来吧~";
 
   const categories = [
     ["医疗或身体状况", /医疗|疾病|生病|诊断|治疗|手术|用药|怀孕|癌症|身体不适/],
@@ -1405,7 +1702,7 @@ function initShuffleScene() {
           scene.setAttribute("aria-label", "洗好的牌堆，可在牌堆外上下左右拖动查看厚度");
           stackTrigger.disabled = false;
           if (heading) heading.textContent = "牌已归位";
-          if (lead) lead.textContent = "在牌堆外上下左右拖动查看厚度，点击牌堆进入选牌。";
+          if (lead) lead.textContent = "拖拽鼠标查看牌堆，点击牌堆进入选牌。";
         }
       }, 0);
       // Reveal the WebGL scene only after its texture has been uploaded. The
@@ -1432,7 +1729,7 @@ function initShuffleScene() {
           scene.classList.remove("is-gathering");
           stackTrigger.disabled = false;
           if (heading) heading.textContent = "牌已归位";
-          if (lead) lead.textContent = "在牌堆外上下左右拖动查看厚度，点击牌堆进入选牌。";
+          if (lead) lead.textContent = "拖拽鼠标查看牌堆，点击牌堆进入选牌。";
         }, (gatherCompleteAt + 0.3) * 1000);
       });
     } else {
@@ -1450,7 +1747,7 @@ function initShuffleScene() {
         scene.setAttribute("aria-label", "洗好的牌堆，可在牌堆外上下左右拖动查看厚度");
         stackTrigger.disabled = false;
         if (heading) heading.textContent = "牌已归位";
-        if (lead) lead.textContent = "在牌堆外上下左右拖动查看厚度，点击牌堆进入选牌。";
+        if (lead) lead.textContent = "拖拽鼠标查看牌堆，点击牌堆进入选牌。";
       }, gatherCompleteAt);
       finishTimeline.play(0);
     }
@@ -1976,6 +2273,8 @@ function renderDrawSelection({ arrivingCardId = "", leavingCardId = "", animateL
 
   const copy = document.querySelector("#remaining-copy");
   if (copy) copy.textContent = remainingCopy();
+  const hint = document.querySelector("#draw-gesture-hint");
+  if (hint) hint.hidden = spreads[state.selectedSpread].positions.length - state.picks.length <= 0;
   const confirm = document.querySelector("#draw-confirm");
   if (confirm) confirm.disabled = state.picks.length !== spreads[state.selectedSpread].positions.length;
   return arrivingCardId
@@ -2241,7 +2540,7 @@ function confirmDraw() {
   if (state.picks.length !== spread.positions.length) return;
   const usage = getUsage();
   if (usage.completedCount >= 3) {
-    notify("今天在这个浏览器中已经完成 3 次占卜。");
+    notify("今日完成 3 次占卜，明天再来吧~");
     return;
   }
 
@@ -2257,7 +2556,11 @@ function confirmDraw() {
       orientation: pick.orientation
     })),
     selectedProfiles: [...state.selectedProfiles],
-    optionalContext: { ...state.context },
+    optionalContext: {
+      ...state.context,
+      profileType: state.profileDraft.type,
+      profileNickname: state.profileDraft.nickname
+    },
     aiReading: "",
     aiStatus: "loading",
     aiError: "",
@@ -2288,6 +2591,7 @@ function initReveal() {
 function saveProfile() {
   const profiles = getProfiles();
   const type = document.querySelector("#profile-type")?.value || "self";
+  if (type === "self" && profiles.self && !window.confirm("是否更新个人信息？")) return;
   const now = new Date().toISOString();
   const profile = {
     id: type === "self" && profiles.self ? profiles.self.id : uid(),
@@ -2302,7 +2606,7 @@ function saveProfile() {
   if (type === "self") profiles.self = profile;
   else profiles.guests.push(profile);
   write(KEYS.profiles, profiles);
-  notify(type === "self" && profiles.self ? "本人档案已保存到当前浏览器。" : "档案已保存到当前浏览器。");
+  notify("档案已保存。");
   render();
 }
 
@@ -2312,7 +2616,7 @@ function deleteProfile(id) {
   profiles.guests = profiles.guests.filter((profile) => profile.id !== id);
   state.selectedProfiles = state.selectedProfiles.filter((profileId) => profileId !== id);
   write(KEYS.profiles, profiles);
-  notify("档案已从当前浏览器删除。");
+  notify("档案已删除。");
   render();
 }
 
@@ -2330,7 +2634,7 @@ function filterHistory() {
 
 function deleteReading(id) {
   write(KEYS.readings, getReadings().filter((reading) => reading.id !== id));
-  notify("这条记录已从当前浏览器删除。");
+  notify("该条记录已删除。");
   filterHistory();
 }
 
@@ -2358,7 +2662,7 @@ async function submitFeedback() {
   button.disabled = true;
   button.textContent = "正在提交…";
   status.className = "notice";
-  status.textContent = "正在连接反馈服务…";
+  status.textContent = "";
   try {
     const response = await fetch(apiUrl("/api/feedback"), {
       method: "POST",
@@ -2367,12 +2671,12 @@ async function submitFeedback() {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     status.className = "notice success";
-    status.textContent = "反馈已由服务器确认保存。谢谢你的说明。";
+    status.textContent = "反馈已发送，感谢您的支持！";
     document.querySelector("#feedback-content").value = "";
     document.querySelector("#feedback-count").textContent = "0";
   } catch {
     status.className = "notice warning";
-    status.textContent = "反馈服务暂时不可用，内容尚未发送。请稍后再试。";
+    status.textContent = "";
   } finally {
     button.disabled = false;
     button.textContent = "提交反馈";
@@ -2447,6 +2751,11 @@ APP.addEventListener("click", (event) => {
 APP.addEventListener("input", (event) => {
   if (event.target.id === "question") state.question = event.target.value;
   if (event.target.id === "optional-context") state.context.optionalText = event.target.value;
+  if (state.screen === "question" && event.target.id === "profile-nickname") {
+    state.profileDraft.nickname = event.target.value;
+    state.profileDraft.touched.nickname = true;
+    autoSaveQuestionProfile();
+  }
   if (event.target.id === "context-gender") state.context.gender = event.target.value;
   if (event.target.id === "context-zodiac") state.context.zodiac = event.target.value;
   if (event.target.id === "context-relationship") state.context.relationshipStatus = event.target.value;
@@ -2702,7 +3011,7 @@ function initGalaxy(container) {
     const renderer = new Renderer({
       alpha: true,
       premultipliedAlpha: false,
-      dpr: Math.min(window.devicePixelRatio || 1, 1.5)
+      dpr: Math.min(window.devicePixelRatio || 1, 1)
     });
     const gl = renderer.gl;
     gl.enable(gl.BLEND);
@@ -2763,9 +3072,13 @@ function initGalaxy(container) {
     let running = true;
     let timeOffset = 0;
     let pausedAt = 0;
+    let lastRenderAt = 0;
+    const frameInterval = 1000 / 30;
     const update = (time) => {
       if (!running) return;
       frameId = requestAnimationFrame(update);
+      if (lastRenderAt && time - lastRenderAt < frameInterval) return;
+      lastRenderAt = time;
       // Keep the shader clock continuous across a deliberately paused render
       // loop. Without this compensation, resuming after a card flight makes
       // the background jump by the entire pause duration on one frame.
@@ -2805,6 +3118,7 @@ function initGalaxy(container) {
           pausedAt = 0;
         }
         running = true;
+        lastRenderAt = 0;
         frameId = requestAnimationFrame(update);
       },
       destroy() {
@@ -2823,7 +3137,21 @@ function initGalaxy(container) {
   }
 }
 
+purposeController = createPurposeRelief(PURPOSE_BG);
+PURPOSE_IMAGE?.addEventListener("load", () => {
+  purposeImageReady = true;
+  purposeImageFailed = false;
+  syncPurposeBackground();
+}, { once: true });
+PURPOSE_IMAGE?.addEventListener("error", () => {
+  purposeImageReady = false;
+  purposeImageFailed = true;
+  PURPOSE_SCENE?.classList.remove("has-image");
+  syncPurposeBackground();
+}, { once: true });
 applyTheme();
 galaxyController = initGalaxy(GALAXY);
 applyTheme();
+window.addEventListener("unicornstudio:error", markUnicornPurposeFailed, { once: true });
+initUnicornPurpose();
 render();
